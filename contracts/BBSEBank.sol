@@ -58,10 +58,15 @@ contract BBSEBank is Ownable{
 
   // Represents a borrower record
   // TODO: Create a Borrower struct with following values: hasActiveLoan, amount, collateral (uint)
+  struct Borrower{
+    bool hasActiveLoan;
+    uint amount;
+    uint collateral;
+  }
 
   // Address to borrower mapping
   // TODO: Create a borrowers mapping
-
+  mapping (address => Borrower) public borrowers;
 
   /**
   * @dev Checks whether the yearlyReturnRate value is between 1 and 100
@@ -82,7 +87,7 @@ contract BBSEBank is Ownable{
   * @param _oracleContract address of the deployed ETHBBSEPriceFeedOracle contract
   */
   // TODO: Use the required modifier to check the yearlyReturnRate value
-  constructor (address _bbseTokenContract, uint32 _yearlyReturnRate, address _oracleContract) public {
+  constructor (address _bbseTokenContract, uint32 _yearlyReturnRate, address _oracleContract) validRate(_yearlyReturnRate) public {
     bbseTokenContract = BBSEToken(_bbseTokenContract);
     oracleContract = ETHBBSEPriceFeedOracle(_oracleContract);
     yearlyReturnRate = _yearlyReturnRate;
@@ -106,6 +111,8 @@ contract BBSEBank is Ownable{
     investors[msg.sender].amount = msg.value;
     investors[msg.sender].hasActiveDeposit = true;
     investors[msg.sender].startTime = block.number;
+
+    totalDepositAmount += msg.value;
   }
 
   /**
@@ -124,6 +131,7 @@ contract BBSEBank is Ownable{
 
     // Updates total deposited amount
     // TODO: Update total deposit
+    totalDepositAmount -= depositedAmount;
 
     // Calculate interest per second
     uint interestPerSecond = interestPerSecondForMinDeposit * (depositedAmount / MIN_DEPOSIT_AMOUNT);
@@ -147,6 +155,9 @@ contract BBSEBank is Ownable{
   */
   // TODO: Implement the updateYearlyReturnRate function (use the respective function modifier from Ownable)
   // TODO: Use the required modifier to check the yearlyReturnRate value
+  function updateYearlyReturnRate(uint32 _yearlyReturnRate) onlyOwner validRate(_yearlyReturnRate) public {
+    yearlyReturnRate = _yearlyReturnRate;
+  }
 
  /**
   * @dev Collateralize BBSE Token to borrow ETH.
@@ -157,23 +168,30 @@ contract BBSEBank is Ownable{
   function borrow(uint amount) public{
     // TODO: Check whether the borrower has an already active loan
     // TODO: Check whether the amount requested is payable by contract (don't forget to consider the totalDepositAmount)
+    require(!borrowers[msg.sender].hasActiveLoan, "Account can't have multiple active loans");
+    require(amount < totalDepositAmount + address(this).balance, "The bank can't lend this amount right now");
 
     // Get the latest price feed rate for ETH/BBSE from the price feed oracle
     // TODO: Uncomment
-    // uint priceFeedRate = oracleContract.getRate();
+    uint priceFeedRate = oracleContract.getRate();
 
     // TODO: Calculate the collateral value and store it in uint collateral
+    uint collateral = (amount * COLLATERALIZATION_RATIO * priceFeedRate)/100;
 
     /* Try to transfer BBSE tokens from msg.sender (i.e. borrower) to BBSEBank.
     *  msg.sender must set an allowance to BBSEBank first, since BBSEBank
     *  needs to transfer the tokens from msg.sender to itself
     */
     // TODO: Uncomment
-    // require(bbseTokenContract.transferFrom(msg.sender, address(this), collateral), "BBSEBank can't receive your tokens");
+    require(bbseTokenContract.transferFrom(msg.sender, address(this), collateral), "BBSEBank can't receive your tokens");
 
     // TODO: Initialize the borrower in borrowers mapping
-    
+      borrowers[msg.sender].amount = amount;
+      borrowers[msg.sender].hasActiveLoan = true;
+      borrowers[msg.sender].collateral = collateral;
+
     // TODO: Transfer the requested amount to the borrower
+    payable(msg.sender).transfer(amount);
   }
 
   /** 
@@ -185,20 +203,28 @@ contract BBSEBank is Ownable{
   function payLoan() public payable {
     // TODO: Check whether the borrower (i.e. function caller) has an active loan
     // TODO: Check whether the amount paid back is equal to the loan amount
+    require(borrowers[msg.sender].hasActiveLoan, "Account must have an active loan to pay back");
+    require(borrowers[msg.sender].amount == msg.value, "The paid amount must match the borrowed amount");
 
     // TODO: Uncomment
-    // uint fee =  (borrowers[msg.sender].collateral * LOAN_FEE_RATE) / 100;
+    uint fee =  (borrowers[msg.sender].collateral * LOAN_FEE_RATE) / 100;
 
     // TODO: Transfer back the BBSE tokens after the fee is cut to borrower
+    bbseTokenContract.transfer(msg.sender, borrowers[msg.sender].collateral - fee);
 
     /* TODO: Reset the respective borrower object in investors mapping
     *        You can set the amount and collateral to 0
     */
+     borrowers[msg.sender].amount = 0;
+      borrowers[msg.sender].hasActiveLoan = false;
+      borrowers[msg.sender].collateral = 0;
   }
 
   /** 
   * @dev Called every time Ether is sent to the contract.
   * Required to fund the contract.
   */  
-  receive() external payable {}
+  receive() external payable {//you could spend gas or do anything you want here, so if you see a large amount of spent gas, it's because of this!
+  //how to fix this? set a gas limit, so if it exceed the limit fail the transaction. (gas will still be consumed due to executed actions)
+  }
 }
